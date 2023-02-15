@@ -1,0 +1,110 @@
+stages:
+  - prepare
+  - test
+  - build
+  - push
+  - deploy
+variables:
+  ELK_VERSION: "6.1.1"
+  RABBITMQ_DEFAULT_USER: "admin"
+  RABBITMQ_DEFAULT_PASS: "123"
+  REGISTRY_URI: "gitlab.lan.local:5050/f.tajedin/mavara-dockerized"
+  SOURCE_DIR: "/var/www/mavara-dockerized"
+
+prepare:
+  image:
+    name: $CI_REGISTRY/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME/docker-compose:latest
+  stage: prepare
+  tags:
+    - docker
+  artifacts:
+    paths:
+      - ./logger/public/
+      - ./mysql/data
+      - ./logger/vendor/
+  cache:
+    paths:
+      - ./logger/vendor/
+  before_script:
+    - cp docker-compose-test.yml docker-compose.yml
+    - docker-compose build --force-rm
+    - docker login $CI_REGISTRY -u $(echo -n  $CI_USER | base64 -d) -p $(echo -n  $CI_PASS | base64 -d)
+    - COMPOSE_HTTP_TIMEOUT=120 docker-compose up -d
+
+  script:
+    - sleep 20
+    - docker-compose exec -T php composer install
+    - docker-compose exec -T php php artisan migrate:refresh --seed
+  after_script:
+    - docker-compose down
+  only:
+    - master
+    - development
+
+test:
+  image:
+    name: $CI_REGISTRY/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME/docker-compose:latest
+  stage: test
+  tags:
+    - docker
+  artifacts:
+    paths:
+      - ./logger/vendor/
+  before_script:
+    - cp docker-compose-test.yml docker-compose.yml
+    - docker login $CI_REGISTRY -u $(echo -n  $CI_USER | base64 -d) -p $(echo -n  $CI_PASS | base64 -d)
+    - COMPOSE_HTTP_TIMEOUT=120 docker-compose up -d
+  script:
+    - docker-compose exec -T php vendor/bin/phpunit
+  after_script:
+    - docker-compose down -v --rmi all
+
+  only:
+    - master
+    - development
+
+build:
+  image:
+    name: $CI_REGISTRY/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME/docker-compose:latest
+  stage: build
+  tags:
+    - docker
+  script:
+    - docker login $CI_REGISTRY -u $(echo -n  $CI_USER | base64 -d) -p $(echo -n  $CI_PASS | base64 -d)
+    - docker-compose -f docker-compose-build-staging.yml build --force-rm
+
+  only:
+    - development
+
+push:
+  image:
+    name: $CI_REGISTRY/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME/docker-compose:latest
+  stage: push
+  tags:
+    - docker
+  script:
+    - docker login $CI_REGISTRY -u $(echo -n  $CI_USER | base64 -d) -p $(echo -n  $CI_PASS | base64 -d)
+    - docker-compose -f docker-compose-build-staging.yml push
+  only:
+    - development
+
+deploy:
+  stage: deploy
+  only:
+    - development
+  tags:
+    - staging
+  before_script:
+    - cd ~/mavara-dockerized
+  variables:
+    MYSQL_ROOT_PASSWORD: TYKQOigJZ2
+    DB_HOST: 127.0.0.1
+  script:
+    - git reset --hard
+    - git checkout $CI_COMMIT_BRANCH
+    - git pull origin $CI_COMMIT_BRANCH
+    - cp docker-compose-staging.yml docker-compose.yml
+    - docker-compose pull
+    - COMPOSE_HTTP_TIMEOUT=120 docker-compose up -d
+    - sleep 20
+    - docker-compose exec -T php php artisan migrate:refresh --seed

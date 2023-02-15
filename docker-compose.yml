@@ -1,0 +1,106 @@
+version: "3.2"
+
+services:
+  node:
+    build:
+      dockerfile: node_watch.Dockerfile
+      context: ./logger
+      args:
+        REGISTRY_URI: ${REGISTRY_URI}
+    restart: unless-stopped
+    volumes:
+      - ./logger/public/:/var/www/logger/public/
+      - ./logger/resources/:/var/www/logger/resources/
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    container_name: node
+    networks:
+      - mavara-network
+
+  laravel_echo_server:
+    build:
+      dockerfile: Dockerfile
+      context: ./echo
+      args:
+        REGISTRY_URI: ${REGISTRY_URI}
+    restart: unless-stopped
+    container_name: laravel_echo_server
+    volumes:
+      - ./echo/laravel-echo-server.json:/opt/echo/laravel-echo-server.json
+      - ./echo/certs:/opt/echo/certs/
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      - php
+      - redis
+    networks:
+      - mavara-network
+
+  mysql:
+    image: ${REGISTRY_URI}/mysql:5.7
+    container_name: mysql
+    restart: unless-stopped
+    volumes:
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./mysql/data:/var/lib/mysql
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    env_file: ./mysql/.env
+    ports:
+      - 3306:3306
+    networks:
+      - mavara-network
+
+  nginx:
+    image: ${REGISTRY_URI}/nginx:1.19.2
+    container_name: nginx
+    restart: unless-stopped
+    volumes:
+      - ./nginx/config-dev.conf:/etc/nginx/conf.d/default.conf
+      - ./logger/:/var/www/logger
+      - ./nginx/cert:/etc/nginx/certs/
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - 80:80
+      - 443:443
+    depends_on:
+      - php
+    networks:
+      - mavara-network
+
+  redis:
+    image: ${REGISTRY_URI}/redis:6.0.8
+    container_name: redis
+    restart: unless-stopped
+    networks:
+      - mavara-network
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+
+  php:
+    restart: unless-stopped
+    build:
+      dockerfile: php_dev.Dockerfile
+      context: ./logger
+      args:
+        REGISTRY_URI: ${REGISTRY_URI}
+    container_name: php
+    hostname: php
+    volumes:
+      - ./logger/local.ini:/usr/local/etc/php/conf.d/local.ini
+      - ./logger/:/var/www/logger/
+      - ~/.ssh/:/root/.ssh/
+      - /etc/sudoers:/var/www/logger/sudoers
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - mavara-network
+
+networks:
+  mavara-network:
+    driver: bridge
